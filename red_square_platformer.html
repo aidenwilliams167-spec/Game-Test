@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Red Square Platformer</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; padding:20px; background:#101827; color:#eaf1ff; font-family:system-ui, sans-serif; }
+  main { width:min(900px,100%); }
+  h1 { margin:0 0 6px; font-size:clamp(1.5rem,4vw,2.2rem); }
+  p { color:#b9c7dc; margin:0 0 14px; }
+  .game-wrap { border:1px solid #34445f; border-radius:14px; overflow:hidden; background:#172338; box-shadow:0 18px 50px #0005; }
+  canvas { display:block; width:100%; height:auto; background:#9bdcff; image-rendering:pixelated; }
+  .bar { display:flex; gap:10px; align-items:center; justify-content:space-between; flex-wrap:wrap; padding:12px 14px; }
+  button { border:0; border-radius:8px; padding:9px 14px; color:#101827; background:#f7d65b; font-weight:700; cursor:pointer; }
+  button:hover { filter:brightness(1.08); }
+  .hint { font-size:.9rem; color:#c8d5e8; }
+  .lesson { margin-top:16px; padding:14px 16px; background:#172338; border:1px solid #34445f; border-radius:12px; }
+  .lesson h2 { font-size:1.1rem; margin:0 0 8px; }
+  .lesson ul { margin:0; padding-left:20px; color:#c8d5e8; line-height:1.6; }
+  code { color:#ffe28a; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Red Square Platformer</h1>
+  <p>Move the red square, jump across the platforms, collect the star, and reach the green flag.</p>
+  <div class="game-wrap">
+    <canvas id="game" width="800" height="450" aria-label="Platformer game canvas"></canvas>
+    <div class="bar"><span class="hint">Move: ← → or A / D · Jump: Space / ↑ / W</span><button id="restart">Restart</button></div>
+  </div>
+  <section class="lesson">
+    <h2>What this teaches you</h2>
+    <ul>
+      <li><code>canvas</code> draws the player, platforms, and background.</li>
+      <li>Keyboard input changes the player's horizontal velocity.</li>
+      <li>Gravity changes vertical velocity; jumping gives it an upward push.</li>
+      <li>Collision checks stop the square inside platforms and let it land.</li>
+      <li>The game loop updates the world, then draws each frame.</li>
+    </ul>
+  </section>
+</main>
+<script>
+// 1) Get the canvas and its drawing context (the tools used to draw).
+const canvas = document.querySelector("#game");
+const ctx = canvas.getContext("2d");
+const restartButton = document.querySelector("#restart");
+
+// 2) Game objects: player and solid platforms.
+const playerStart = { x: 42, y: 350, width: 28, height: 28 };
+const player = { ...playerStart, vx: 0, vy: 0, onGround: false };
+const platforms = [
+  { x: 0, y: 410, width: 800, height: 40 },
+  { x: 145, y: 335, width: 125, height: 18 },
+  { x: 315, y: 270, width: 125, height: 18 },
+  { x: 490, y: 205, width: 125, height: 18 },
+  { x: 650, y: 300, width: 110, height: 18 }
+];
+const star = { x: 365, y: 232, size: 18, collected: false };
+const goal = { x: 720, y: 260, width: 26, height: 40 };
+const keys = new Set();
+const gravity = 0.55;
+const moveSpeed = 3.6;
+const jumpPower = 10.5;
+let won = false;
+
+// 3) Listen for keys. A Set remembers which keys are currently held.
+window.addEventListener("keydown", (event) => {
+  const key = event.key.toLowerCase();
+  if (["arrowleft", "arrowright", "arrowup", " "].includes(key)) event.preventDefault();
+  keys.add(key);
+  if ((key === "arrowup" || key === "w" || key === " ") && player.onGround) {
+    player.vy = -jumpPower;
+    player.onGround = false;
+  }
+});
+window.addEventListener("keyup", (event) => keys.delete(event.key.toLowerCase()));
+window.addEventListener("blur", () => keys.clear());
+restartButton.addEventListener("click", resetGame);
+
+function overlaps(a, b) {
+  return a.x < b.x + b.width && a.x + a.width > b.x &&
+         a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+// 4) Update positions and resolve collisions. This is the game's "physics" step.
+function update() {
+  if (won) return;
+  player.vx = 0;
+  if (keys.has("arrowleft") || keys.has("a")) player.vx = -moveSpeed;
+  if (keys.has("arrowright") || keys.has("d")) player.vx = moveSpeed;
+
+  // Horizontal movement first, then keep the player inside the canvas.
+  player.x += player.vx;
+  player.x = Math.max(0, Math.min(canvas.width - player.width, player.x));
+
+  // Gravity pulls the player downward every frame.
+  player.vy += gravity;
+  const previousY = player.y;
+  player.y += player.vy;
+  player.onGround = false;
+
+  // Land on a platform only when falling through its top surface.
+  for (const platform of platforms) {
+    const wasAbove = previousY + player.height <= platform.y;
+    const isCrossingTop = player.y + player.height >= platform.y;
+    const horizontalOverlap = player.x + player.width > platform.x && player.x < platform.x + platform.width;
+    if (player.vy >= 0 && wasAbove && isCrossingTop && horizontalOverlap) {
+      player.y = platform.y - player.height;
+      player.vy = 0;
+      player.onGround = true;
+    }
+  }
+
+  // Falling off the screen returns the player to the starting point.
+  if (player.y > canvas.height + 80) resetPlayer();
+
+  const starBox = { x: star.x - star.size / 2, y: star.y - star.size / 2, width: star.size, height: star.size };
+  if (!star.collected && overlaps(player, starBox)) star.collected = true;
+  if (overlaps(player, goal) && star.collected) won = true;
+}
+
+// 5) Draw everything. Canvas coordinates start at the top-left (0, 0).
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // Sky and clouds
+  ctx.fillStyle = "#9bdcff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#ffffffaa";
+  cloud(115, 72); cloud(430, 105); cloud(670, 65);
+  // Platforms
+  for (const platform of platforms) {
+    ctx.fillStyle = "#426b45"; ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+    ctx.fillStyle = "#78bd65"; ctx.fillRect(platform.x, platform.y, platform.width, 5);
+  }
+  // Collectible star
+  if (!star.collected) {
+    ctx.fillStyle = "#ffd83d";
+    drawStar(star.x, star.y, star.size);
+  }
+  // Goal flag
+  ctx.fillStyle = "#34445f"; ctx.fillRect(goal.x, goal.y, 5, goal.height);
+  ctx.fillStyle = star.collected ? "#36d982" : "#a0aab9";
+  ctx.beginPath(); ctx.moveTo(goal.x + 5, goal.y); ctx.lineTo(goal.x + 27, goal.y + 8); ctx.lineTo(goal.x + 5, goal.y + 16); ctx.closePath(); ctx.fill();
+  // Player: the red square
+  ctx.fillStyle = "#e53935"; ctx.fillRect(player.x, player.y, player.width, player.height);
+  ctx.fillStyle = "#ff8a80"; ctx.fillRect(player.x + 4, player.y + 4, 7, 6);
+  // Instructions / win message
+  ctx.fillStyle = "#183047"; ctx.font = "bold 17px system-ui";
+  ctx.fillText(`Star: ${star.collected ? "1 / 1" : "0 / 1"}`, 18, 28);
+  if (won) {
+    ctx.fillStyle = "#102236cc"; ctx.fillRect(180, 150, 440, 110);
+    ctx.fillStyle = "#ffffff"; ctx.textAlign = "center"; ctx.font = "bold 28px system-ui";
+    ctx.fillText("Level complete! 🎉", 400, 195);
+    ctx.font = "16px system-ui"; ctx.fillText("Press Restart to play again", 400, 228); ctx.textAlign = "left";
+  }
+}
+function cloud(x, y) {
+  ctx.beginPath(); ctx.arc(x, y, 22, 0, Math.PI * 2); ctx.arc(x + 24, y - 9, 28, 0, Math.PI * 2); ctx.arc(x + 52, y, 20, 0, Math.PI * 2); ctx.fill();
+}
+function drawStar(x, y, size) {
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const radius = i % 2 === 0 ? size / 2 : size / 4;
+    const angle = -Math.PI / 2 + i * Math.PI / 5;
+    const px = x + Math.cos(angle) * radius, py = y + Math.sin(angle) * radius;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath(); ctx.fill();
+}
+function resetPlayer() { Object.assign(player, playerStart, { vx: 0, vy: 0, onGround: false }); }
+function resetGame() { resetPlayer(); star.collected = false; won = false; }
+
+// 6) The game loop: update, draw, then ask the browser for another frame.
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+gameLoop();
+</script>
+</body>
+</html>
